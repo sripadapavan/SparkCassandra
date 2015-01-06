@@ -215,7 +215,7 @@ public class Spark_Cassandra implements Serializable {
 			public Tuple2<String, Price> call(CassandraRow row) throws Exception {
 				Price price = new Price();
 				price.setPartnumber(row.getString(0));
-				//price.setOfferprice(row.getDouble(1));
+				price.setOfferprice(row.getDouble(1));
 				return new Tuple2<String, Price>(price.getPartnumber(), price);
 			}
 		});
@@ -226,7 +226,7 @@ public class Spark_Cassandra implements Serializable {
 		 * for (Tuple2<String, Price> tuple : priceResults) {
 		 * System.out.println(tuple.toString()); }
 		 */
-		JavaRDD<CassandraRow> promoRDD = functions.cassandraTable("promotionks_uat", "itempromotion").select("partnumber", "promotionid");
+		JavaRDD<CassandraRow> promoRDD = functions.cassandraTable("promotionks", "itempromotion").select("partnumber", "promotionid");
 		promoRDD.cache();
 
 		JavaPairRDD<String, Promo> promoPairRDD = promoRDD.mapToPair(new PairFunction<CassandraRow, String, Promo>() {
