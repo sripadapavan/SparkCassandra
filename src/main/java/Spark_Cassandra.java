@@ -15,6 +15,7 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
+import org.apache.spark.serializer.KryoRegistrator;
 import org.apache.spark.sql.SchemaRDD;
 import org.apache.spark.sql.api.java.JavaSQLContext;
 import org.apache.spark.sql.api.java.JavaSchemaRDD;
@@ -28,8 +29,12 @@ import com.datastax.spark.connector.japi.CassandraJavaUtil;
 import com.datastax.spark.connector.japi.CassandraRow;
 import com.datastax.spark.connector.japi.SparkContextJavaFunctions;
 import com.datastax.spark.connector.japi.rdd.CassandraJavaRDD;
+import com.esotericsoftware.kryo.Kryo;
+import com.google.common.base.Optional;
 
 public class Spark_Cassandra implements Serializable {
+
+	
 
 	public void loadPriceAndPromo() {
 
@@ -196,12 +201,13 @@ public class Spark_Cassandra implements Serializable {
 	public void joinPricePromouUsingCassandraJavaUtil() {
 		SparkConf conf = new SparkConf().setAppName("MyApp")
 		// .setMaster("spark://platform-ad-1:7077")
-				.setMaster("local[2]").set("spark.ui.port", "4040").set("spark.cassandra.connection.host", "10.66.136.204");
+				.setMaster("local[2]").set("spark.ui.port", "4040").set("spark.cassandra.connection.host", "10.66.136.201");
 
 		SparkContext sc = new SparkContext(conf);
 		SparkContextJavaFunctions functions = CassandraJavaUtil.javaFunctions(sc);
 
-		JavaRDD<CassandraRow> priceRDD = functions.cassandraTable("priceks", "itemprice").select("partnumber", "offerprice");
+		long start= System.currentTimeMillis();
+		JavaRDD<CassandraRow> priceRDD = functions.cassandraTable("priceks_uat", "itemprice").select("partnumber", "offerprice");
 		priceRDD.cache();
 
 		JavaPairRDD<String, Price> pricePairRDD = priceRDD.mapToPair(new PairFunction<CassandraRow, String, Price>() {
@@ -209,17 +215,18 @@ public class Spark_Cassandra implements Serializable {
 			public Tuple2<String, Price> call(CassandraRow row) throws Exception {
 				Price price = new Price();
 				price.setPartnumber(row.getString(0));
-				price.setOfferprice(row.getDouble(1));
+				//price.setOfferprice(row.getDouble(1));
 				return new Tuple2<String, Price>(price.getPartnumber(), price);
 			}
 		});
 		pricePairRDD.cache();
-		List<Tuple2<String, Price>> priceResults = pricePairRDD.collect();
+		pricePairRDD=pricePairRDD.distinct();
+		//List<Tuple2<String, Price>> priceResults = pricePairRDD.collect();
 		/*
 		 * for (Tuple2<String, Price> tuple : priceResults) {
 		 * System.out.println(tuple.toString()); }
 		 */
-		JavaRDD<CassandraRow> promoRDD = functions.cassandraTable("promotionks", "itempromotion").select("partnumber", "promotionid");
+		JavaRDD<CassandraRow> promoRDD = functions.cassandraTable("promotionks_uat", "itempromotion").select("partnumber", "promotionid");
 		promoRDD.cache();
 
 		JavaPairRDD<String, Promo> promoPairRDD = promoRDD.mapToPair(new PairFunction<CassandraRow, String, Promo>() {
@@ -232,20 +239,24 @@ public class Spark_Cassandra implements Serializable {
 			}
 		});
 		promoPairRDD.cache();
-		List<Tuple2<String, Promo>> promoResults = promoPairRDD.collect();
+		//List<Tuple2<String, Promo>> promoResults = promoPairRDD.collect();
 		/*
 		 * for (Tuple2<String, Promo> tuple : promoResults) {
 		 * System.out.println(tuple.toString()); }
 		 */
 
-		JavaRDD<Tuple2<Price, Promo>> joinedRDD = pricePairRDD.join(promoPairRDD).values();
+		JavaRDD<Tuple2<Price, Optional<Promo>>> joinedRDD = pricePairRDD.leftOuterJoin(promoPairRDD).values();
 
-		List<Tuple2<Price, Promo>> joineList = joinedRDD.collect();
+		List<Tuple2<Price, Optional<Promo>>> joineList = joinedRDD.collect();
 
-		for (Tuple2<Price, Promo> tuple : joineList) {
+		long end=System.currentTimeMillis();
+		
+		for (Tuple2<Price, Optional<Promo>> tuple : joineList) {
 			System.out.println(tuple.toString());
 		}
-
+		System.out.println("Time taken to compute : "+(end-start));
+		System.out.println("Price size : "+pricePairRDD.count());
+		System.out.println("Promo size : "+promoPairRDD.count());
 		sc.stop();
 	}
 
@@ -254,10 +265,11 @@ public class Spark_Cassandra implements Serializable {
 		String master = System.getProperty("env");
 		if(master==null) master="local[2]";
 		SparkConf conf = new SparkConf().setAppName("MyApp")
-				//.setMaster("spark://platform-ad-1:7077")
-
-		.setMaster(master)
-				.set("spark.ui.port", "4040").set("spark.cassandra.connection.host", "10.66.136.204");
+				//		.setMaster("spark://platform-ad-1:7077")
+						.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+						.set("spark.kryo.registrator", "MyRegistrator")
+				.setMaster(master)
+						.set("spark.ui.port", "4040").set("spark.cassandra.connection.host", "10.66.136.204");
 
 		SparkContext sc = new SparkContext(conf);
 		CassandraSQLContext csc = new CassandraSQLContext(sc);
@@ -265,7 +277,7 @@ public class Spark_Cassandra implements Serializable {
 		JavaSQLContext jsc = new JavaSQLContext(csc);
 
 		long start = System.currentTimeMillis();
-		SchemaRDD priceSchema = csc.sql("SELECT distinct partnumber FROM priceks.itemprice");
+		SchemaRDD priceSchema = csc.sql("SELECT partnumber FROM priceks.itemprice");
 		priceSchema.registerTempTable("price");
 
 		csc.setKeyspace("promotionks");
@@ -289,10 +301,43 @@ public class Spark_Cassandra implements Serializable {
 		System.out.println("Time taken : " + (end - start));
 		sc.stop();
 	}
+public void test() {
+		
+		String master = System.getProperty("env");
+		if(master==null) master="local[2]";
+		SparkConf conf = new SparkConf().setAppName("MyApp")
+		//		.setMaster("spark://platform-ad-1:7077")
+				.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+				.set("spark.kryo.registrator", "MyRegistrator")
+		.setMaster(master)
+				.set("spark.ui.port", "4040").set("spark.cassandra.connection.host", "10.66.136.204");
 
+		SparkContext sc = new SparkContext(conf);
+		CassandraSQLContext csc = new CassandraSQLContext(sc);
+		csc.setKeyspace("priceks");
+		JavaSQLContext jsc = new JavaSQLContext(csc);
+
+		long start = System.currentTimeMillis();
+		SchemaRDD priceSchema = csc.sql("SELECT partnumber FROM priceks.itemprice limit 10");
+		priceSchema.registerTempTable("price");
+		
+		JavaSchemaRDD javaRDD = jsc.sql("SELECT * FROM price");
+
+		List<Row> list = javaRDD.collect();
+		long end = System.currentTimeMillis();
+
+		System.out.println("total records : " + list.size());
+		for (Row row : list)
+			
+				System.out.println(row.getString(0));
+			
+		System.out.println("Time taken : " + (end - start));
+		sc.stop();
+	}
 	public static void main(String[] args) throws IOException {
 		// new Spark_Cassandra().loadPriceAndPromo();
-		new Spark_Cassandra().joinPricePromoUsingCassandraContext();
+		new Spark_Cassandra().joinPricePromouUsingCassandraJavaUtil();
 	}
-
+	
+	
 }
